@@ -47,7 +47,7 @@ python3 -m venv panel_env
 # ذخیره اطلاعات لاگین در یک فایل کانفیگ برای HTML
 echo "{\"username\": \"$INPUT_ADMIN_USER\", \"password\": \"$INPUT_ADMIN_PASS\"}" > /root/Proxy-Manager/admin_auth.json
 
-echo -e "\n${GREEN}[3/5] در حال نوشتن هسته سیستم (main.py و bot.py)...${NC}"
+echo -e "\n${GREEN}[3/5] در حال نوشتن هسته سیستم (main.py , bot.py , panel.html)...${NC}"
 
 # -----------------------------------
 # ایجاد فایل main.py بدون تغییر
@@ -678,50 +678,436 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# ایجاد فایل panel.html (با تغییر متن لاگین)
+# ایجاد فایل panel.html با تغییرات نهایی
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>پورتال مدیریت پروکسی</title>
-    <style>
-        body { background: #121212; color: #fff; font-family: Tahoma, sans-serif; text-align: center; margin: 0; padding: 20px; }
-        .login-box { margin: 100px auto; width: 300px; background: #1e1e1e; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        input { width: 90%; padding: 10px; margin: 10px 0; background: #333; color: white; border: 1px solid #555; border-radius: 5px; }
-        button { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; width: 100%; }
-        button:hover { background: #45a049; }
-        #dashboard { display: none; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>پنل مدیریت جامع کانفیگ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <link href="https://v1.fontapi.ir/css/Vazir" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script> tailwind.config = { theme: { extend: { fontFamily: { sans: ['Vazir', 'sans-serif'] }, colors: { dark: { 900: '#121212', 800: '#1e1e1e', 700: '#2c2c2c', 600: '#3d3d3d' }, pistachio: { 400: '#b4e650', 500: '#9cd33b', 600: '#85b927' } } } } } </script>
+    <style> body { font-family: 'Vazir', sans-serif; background-color: #121212; color: #ffffff; -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 0px; background: transparent; } .glow-pistachio { box-shadow: 0 0 15px rgba(156, 211, 59, 0.3); } </style>
 </head>
-<body>
+<body x-data="panelApp()" x-init="initData()" class="antialiased w-full h-screen overflow-hidden flex flex-col">
 
-    <div id="login-container" class="login-box">
-        <!-- اینجا دقیقا همون متنی که خواستی عوض شد -->
-        <h2>پورتال مدیریت پروکسی</h2>
-        <input type="text" id="username" placeholder="نام کاربری">
-        <input type="password" id="password" placeholder="رمز عبور">
-        <button onclick="login()">ورود به پنل</button>
+    <!-- لاگین -->
+    <div x-show="!loggedIn" class="flex-1 flex items-center justify-center p-6 bg-dark-900" x-transition>
+        <div class="w-full max-w-sm bg-dark-800 rounded-3xl p-8 border border-dark-700 shadow-2xl relative overflow-hidden">
+            <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-pistachio-500 rounded-full blur-[70px] opacity-20"></div>
+            <div class="text-center mb-8 relative z-10">
+                <div class="w-20 h-20 bg-dark-700 rounded-full flex items-center justify-center mx-auto mb-4 border border-pistachio-500/30"><i class="fa-solid fa-fingerprint text-pistachio-500 text-4xl"></i></div>
+                <h2 class="text-2xl font-black text-white">پورتال مدیریت پروکسی</h2>
+            </div>
+            <div class="space-y-5 relative z-10">
+                <input x-model="loginUser" type="text" placeholder="نام کاربری" class="w-full bg-dark-700 border border-dark-600 text-white rounded-2xl p-3.5 outline-none">
+                <input x-model="loginPass" type="password" placeholder="رمز عبور" class="w-full bg-dark-700 border border-dark-600 text-white rounded-2xl p-3.5 outline-none">
+                <button @click="doLogin()" class="w-full bg-pistachio-500 text-dark-900 font-extrabold rounded-2xl py-3.5 mt-4 glow-pistachio">ورود</button>
+            </div>
+        </div>
     </div>
 
-    <div id="dashboard">
-        <h2>داشبورد مدیریت ربات</h2>
-        <p>پنل شما با موفقیت نصب شده و در حال کار است.</p>
-        <!-- بقیه امکانات داشبورد شما طبق طراحی قبلی شما در اینجا بارگیری می‌شود -->
+    <!-- اپلیکیشن اصلی -->
+    <div x-show="loggedIn" class="flex flex-col h-screen w-full bg-dark-900" x-cloak>
+        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 sticky top-0 z-20">
+            <div>
+                <h1 class="text-lg font-bold text-white">
+                    <span x-show="activeTab === 'dashboard'">داشبورد</span>
+                    <span x-show="activeTab === 'stores'">مدیریت فروشگاه‌ها</span>
+                    <span x-show="activeTab === 'packages'">پکیج‌های حجمی</span>
+                    <span x-show="activeTab === 'reports'">گزارشات و مالی</span>
+                    <span x-show="activeTab === 'users'">نمایندگان</span>
+                    <span x-show="activeTab === 'settings'">تنظیمات سیستم</span>
+                </h1>
+                <p class="text-[10px] text-pistachio-500 flex items-center gap-1 mt-1"><span class="w-1.5 h-1.5 rounded-full bg-pistachio-400 animate-pulse"></span> متصل</p>
+            </div>
+            <div class="text-left bg-dark-900 px-3 py-1.5 rounded-xl border border-dark-600">
+                <div class="text-pistachio-500 font-mono text-sm font-bold" x-text="serverClock.split(' ')[1] || '00:00:00'"></div>
+                <div class="text-gray-400 font-mono text-[10px]" x-text="serverClock.split(' ')[0] || 'YYYY-MM-DD'"></div>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-5 pb-36">
+            
+            <!-- 1. داشبورد -->
+            <div x-show="activeTab === 'dashboard'" class="space-y-4">
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 flex items-center justify-between">
+                    <div><p class="text-sm text-gray-400 mb-1">کل کانفیگ‌های ساخته شده</p><p class="text-3xl font-black text-white" x-text="stats.total_configs"></p></div>
+                    <div class="w-12 h-12 rounded-2xl bg-dark-700 text-pistachio-500 flex items-center justify-center text-xl"><i class="fa-solid fa-bolt"></i></div>
+                </div>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 mt-5">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2"><i class="fa-solid fa-chart-pie ml-1"></i> آمار به تفکیک فروشگاه</h4>
+                    <div class="space-y-3">
+                        <template x-for="stat in stats.store_stats" :key="stat.name">
+                            <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
+                                <span class="text-sm font-bold text-white" x-text="stat.name"></span>
+                                <span class="text-pistachio-500 font-bold text-sm bg-dark-800 px-3 py-1 rounded-lg" x-text="stat.config_count + ' کانفیگ'"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. فروشگاه‌ها -->
+            <div x-show="activeTab === 'stores'" class="space-y-5">
+                <h3 class="text-pistachio-500 font-bold mb-2 pl-2 border-r-2 border-pistachio-500"><i class="fa-solid ml-1" :class="editStoreId ? 'fa-pen' : 'fa-plus-circle'"></i> <span x-text="editStoreId ? 'ویرایش فروشگاه' : 'افزودن فروشگاه جدید'"></span></h3>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 space-y-4">
+                    <div><label class="block text-xs text-gray-400 mb-1">نام نمایشی فروشگاه</label><input x-model="newStore.name" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none"></div>
+                    <div>
+                        <label class="block text-xs text-pistachio-500 font-bold mb-1">اتصال به کدام سرور؟</label>
+                        <select x-model="newStore.panel_id" class="w-full bg-dark-900 border border-pistachio-500/50 rounded-xl p-3 text-white outline-none">
+                            <option value="">-- انتخاب سرور --</option>
+                            <template x-for="p in panelsList" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div><label class="block text-xs text-gray-400 mb-1">پورت X-UI</label><input x-model="newStore.inbound_port" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                        <div><label class="block text-xs text-gray-400 mb-1">پیشوند (انگلیسی)</label><input x-model="newStore.prefix" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    </div>
+                    <div><label class="block text-xs text-gray-400 mb-1">شروع کانتر</label><input x-model="newStore.counter" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    
+                    <div class="flex gap-2 mt-2">
+                        <button @click="saveStore()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio" x-text="editStoreId ? 'ثبت تغییرات' : 'ذخیره فروشگاه'"></button>
+                        <button x-show="editStoreId" @click="cancelEditStore()" class="w-1/3 bg-dark-700 text-gray-400 border border-dark-600 font-bold py-3.5 rounded-xl">لغو</button>
+                    </div>
+                </div>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 mt-5">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2">لیست فروشگاه‌ها</h4>
+                    <div class="space-y-3">
+                        <template x-for="store in storesList" :key="store.id">
+                            <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
+                                <div>
+                                    <p class="text-sm font-bold text-white" x-text="store.name"></p>
+                                    <p class="text-[10px] text-gray-400 mt-1">سرور: <span class="text-pistachio-500" x-text="store.panel_name || 'نامشخص'"></span> | پورت: <span x-text="store.inbound_port" class="text-pistachio-500"></span></p>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button @click="startEditStore(store)" class="text-blue-400 hover:bg-blue-500/20 p-2.5 rounded-xl transition-colors bg-dark-800"><i class="fa-solid fa-pen"></i></button>
+                                    <button @click="deleteStore(store.id)" class="text-red-500 hover:bg-red-500/20 p-2.5 rounded-xl transition-colors bg-dark-800"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. پکیج‌ها -->
+            <div x-show="activeTab === 'packages'" class="space-y-5">
+                <h3 class="text-pistachio-500 font-bold mb-2 pl-2 border-r-2 border-pistachio-500"><i class="fa-solid ml-1" :class="editPackageId ? 'fa-pen' : 'fa-box'"></i> <span x-text="editPackageId ? 'ویرایش پکیج' : 'تعریف پکیج جدید'"></span></h3>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 space-y-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">انتخاب فروشگاه</label>
+                        <select x-model="newPackage.store_id" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none">
+                            <option value="">-- انتخاب کنید --</option>
+                            <template x-for="store in storesList" :key="store.id"><option :value="store.id" x-text="store.name"></option></template>
+                        </select>
+                    </div>
+                    <div><label class="block text-xs text-gray-400 mb-1">نام دکمه نمایشی</label><input x-model="newPackage.name" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none"></div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div><label class="block text-xs text-gray-400 mb-1">حجم (GB)</label><input x-model="newPackage.volume" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                        <div><label class="block text-xs text-gray-400 mb-1">زمان (روز)</label><input x-model="newPackage.days" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    </div>
+                    <div><label class="block text-xs text-gray-400 mb-1">پسوند اختصاصی (انگلیسی)</label><input x-model="newPackage.suffix" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    <div class="flex gap-2 mt-2">
+                        <button @click="savePackage()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio" x-text="editPackageId ? 'ثبت تغییرات' : 'افزودن پکیج'"></button>
+                        <button x-show="editPackageId" @click="cancelEditPackage()" class="w-1/3 bg-dark-700 text-gray-400 border border-dark-600 font-bold py-3.5 rounded-xl hover:text-white">لغو</button>
+                    </div>
+                </div>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 mt-5">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2">پکیج‌ها به تفکیک فروشگاه</h4>
+                    <div class="space-y-3">
+                        <template x-for="store in storesList" :key="store.id">
+                            <div x-data="{ open: false }" class="bg-dark-900 rounded-xl border border-dark-600 overflow-hidden">
+                                <button @click="open = !open" class="w-full flex justify-between items-center p-4 bg-dark-800/50 hover:bg-dark-700 transition-colors">
+                                    <span class="font-bold text-white text-sm" x-text="'📦 پکیج‌های ' + store.name"></span>
+                                    <i class="fa-solid fa-chevron-down transition-transform text-pistachio-500" :class="open ? 'rotate-180' : ''"></i>
+                                </button>
+                                <div x-show="open" class="p-3 space-y-2 border-t border-dark-600">
+                                    <template x-for="pkg in packagesList.filter(p => p.store_id === store.id)" :key="pkg.id">
+                                        <div class="flex justify-between items-center bg-dark-800 p-3 rounded-xl border border-dark-700">
+                                            <div><p class="text-sm font-bold text-white" x-text="pkg.name"></p><p class="text-[11px] text-gray-400 mt-1"><span x-text="pkg.volume"></span> گیگ | <span x-text="pkg.days"></span> روز</p></div>
+                                            <div class="flex gap-2">
+                                                <button @click="startEditPackage(pkg)" class="text-blue-400 hover:bg-blue-500/20 p-2 rounded-lg transition-colors bg-dark-900"><i class="fa-solid fa-pen"></i></button>
+                                                <button @click="deletePackage(pkg.id)" class="text-red-500 hover:bg-red-500/20 p-2 rounded-lg transition-colors bg-dark-900"><i class="fa-solid fa-trash"></i></button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. گزارشات -->
+            <div x-show="activeTab === 'reports'" class="space-y-5">
+                <h3 class="text-pistachio-500 font-bold mb-2 pl-2 border-r-2 border-pistachio-500"><i class="fa-solid fa-chart-bar ml-1"></i> گزارش‌گیری</h3>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 space-y-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">انتخاب فروشگاه</label>
+                        <select x-model="reportParams.store_id" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none">
+                            <option value="">-- انتخاب کنید --</option>
+                            <template x-for="store in storesList" :key="store.id"><option :value="store.id" x-text="store.name"></option></template>
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div><label class="block text-xs text-gray-400 mb-1">از تاریخ و ساعت</label><input x-model="reportParams.start_date" type="datetime-local" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none text-[11px]" dir="ltr"></div>
+                        <div><label class="block text-xs text-gray-400 mb-1">تا تاریخ و ساعت</label><input x-model="reportParams.end_date" type="datetime-local" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none text-[11px]" dir="ltr"></div>
+                    </div>
+                    <button @click="fetchReport()" class="w-full mt-2 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio">دریافت گزارش</button>
+                </div>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 mt-5" x-show="reportResults !== null">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2">نتیجه جستجو</h4>
+                    <div class="space-y-3">
+                        <template x-for="res in reportResults" :key="res.package_name">
+                            <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
+                                <span class="text-sm font-bold text-white" x-text="res.package_name"></span>
+                                <span class="text-pistachio-500 font-bold text-sm bg-dark-800 px-3 py-1 rounded-lg" x-text="res.count + ' عدد'"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 5. نمایندگان (کاربران) -->
+            <div x-show="activeTab === 'users'" class="space-y-5">
+                <h3 class="text-pistachio-500 font-bold mb-2 pl-2 border-r-2 border-pistachio-500"><i class="fa-solid fa-users ml-1"></i> تخصیص دسترسی بات</h3>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 space-y-4">
+                    <div><label class="block text-xs text-gray-400 mb-1">Chat ID تلگرام</label><input x-model="newUser.chat_id" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-pistachio-400 tracking-wider outline-none" dir="ltr"></div>
+                    <div><label class="block text-xs text-gray-400 mb-1">نام نماینده</label><input x-model="newUser.owner_name" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none"></div>
+                    <div class="bg-dark-900 p-4 rounded-xl border border-dark-600">
+                        <p class="text-xs text-gray-400 mb-3 border-b border-dark-700 pb-2">فروشگاه‌های مجاز برای این فرد</p>
+                        <div class="space-y-3">
+                            <template x-for="store in storesList" :key="store.id">
+                                <label class="flex items-center gap-3 w-full p-2 rounded-lg active:bg-dark-800">
+                                    <input type="checkbox" :value="store.id" x-model="newUser.allowed_stores" class="w-5 h-5 rounded accent-pistachio-500">
+                                    <span class="text-sm" x-text="store.name"></span>
+                                </label>
+                            </template>
+                        </div>
+                    </div>
+                    <button @click="saveUser()" class="w-full mt-2 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio">ثبت نماینده</button>
+                </div>
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 mt-5">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2">لیست نمایندگان مجاز</h4>
+                    <div class="space-y-3">
+                        <template x-for="user in usersList" :key="user.id">
+                            <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
+                                <div><p class="text-sm font-bold text-white" x-text="user.owner_name"></p><p class="text-[11px] text-gray-400 mt-1" dir="ltr" x-text="user.chat_id"></p></div>
+                                <button @click="deleteUser(user.id)" class="text-red-500 hover:bg-red-500/20 p-2.5 rounded-xl transition-colors bg-dark-800"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6. تنظیمات (مولتی‌پنل، مسیریابی و بکاپ) -->
+            <div x-show="activeTab === 'settings'" class="space-y-6">
+                
+                <!-- بخش بکاپ و ریاستور -->
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 shadow-lg relative overflow-hidden">
+                    <div class="absolute -right-4 -top-4 w-16 h-16 bg-pistachio-500/10 rounded-full blur-xl"></div>
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2 flex justify-between"><span>محافظت از اطلاعات (دیتابیس)</span><i class="fa-solid fa-database"></i></h4>
+                    <div class="grid grid-cols-2 gap-4">
+                        <button @click="downloadBackup()" class="flex flex-col items-center justify-center bg-dark-900 border border-dark-600 hover:border-pistachio-500 rounded-2xl p-4 transition-colors">
+                            <i class="fa-solid fa-download text-3xl text-pistachio-500 mb-2"></i>
+                            <span class="text-xs font-bold text-white">دریافت فایل بکاپ</span>
+                        </button>
+                        <div class="relative flex flex-col items-center justify-center bg-dark-900 border border-dark-600 hover:border-blue-500 rounded-2xl p-4 transition-colors cursor-pointer">
+                            <input type="file" @change="uploadBackup" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".db">
+                            <i class="fa-solid fa-upload text-3xl text-blue-500 mb-2"></i>
+                            <span class="text-xs font-bold text-white">بازگردانی دیتابیس</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- بخش مدیریت سرورهای X-UI -->
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 shadow-lg">
+                    <h4 class="text-pistachio-500 font-bold mb-4 border-b border-dark-700 pb-2 flex justify-between"><span>مدیریت سرورهای X-UI</span><i class="fa-solid fa-server"></i></h4>
+                    
+                    <!-- فرم افزودن / ویرایش سرور -->
+                    <div class="space-y-4 mb-6 bg-dark-900 p-4 rounded-2xl border border-dark-600">
+                        <h5 class="text-xs text-white font-bold mb-2"><i class="fa-solid" :class="editPanelId ? 'fa-pen' : 'fa-plus'"></i> <span x-text="editPanelId ? 'ویرایش سرور' : 'افزودن سرور جدید'"></span></h5>
+                        <div><input x-model="newPanel.name" type="text" placeholder="نام دلخواه (مثلا سرور هلند)" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
+                        <div><input x-model="newPanel.xui_url" type="text" placeholder="آدرس سرور (https://ip:port/secret)" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div><input x-model="newPanel.xui_user" type="text" placeholder="یوزرنیم X-UI" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
+                            <div><input x-model="newPanel.xui_pass" type="password" placeholder="پسورد X-UI" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="savePanel()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3 rounded-xl glow-pistachio" x-text="editPanelId ? 'ذخیره تغییرات سرور' : 'ثبت سرور'"></button>
+                            <button x-show="editPanelId" @click="cancelEditPanel()" class="w-1/3 bg-dark-700 text-gray-400 font-bold py-3 rounded-xl border border-dark-600">لغو</button>
+                        </div>
+                    </div>
+
+                    <!-- لیست سرورها -->
+                    <div class="space-y-3">
+                        <template x-for="p in panelsList" :key="p.id">
+                            <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
+                                <div><p class="text-sm font-bold text-white" x-text="p.name"></p><p class="text-[10px] text-gray-400 mt-1" dir="ltr" x-text="p.xui_url"></p></div>
+                                <div class="flex gap-2">
+                                    <button @click="startEditPanel(p)" class="text-blue-400 p-2 bg-dark-800 rounded-lg"><i class="fa-solid fa-pen"></i></button>
+                                    <button @click="deletePanel(p.id)" class="text-red-500 p-2 bg-dark-800 rounded-lg"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- بخش مسیریابی (کانفیگ ایران) -->
+                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 shadow-lg">
+                    <h4 class="text-sm text-white font-bold border-b border-dark-600 pb-2 flex justify-between"><span>مسیریابی امن VPN</span><i class="fa-solid fa-route text-pistachio-500"></i></h4>
+                    <div class="mt-4"><label class="block text-xs text-gray-400 mb-2">کانفیگ اتصال (سرور ایران و ...)</label><textarea x-model="settingsData.vpn_config" rows="4" class="w-full bg-dark-900 text-pistachio-400 font-mono text-xs border border-dark-600 rounded-xl p-4 outline-none resize-none" dir="ltr" placeholder="vless://..."></textarea></div>
+                    <button @click="saveSettings()" class="w-full mt-4 bg-dark-700 border border-pistachio-500 text-pistachio-500 font-bold py-3.5 rounded-xl active:bg-pistachio-500 active:text-dark-900 transition-colors">ذخیره کانفیگ مسیریابی</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- منوی 6 تایی کامل -->
+        <nav class="fixed bottom-0 w-full bg-dark-800/95 backdrop-blur-md border-t border-dark-700 pb-2 pt-2 px-1 z-30">
+            <div class="flex justify-between items-center h-14">
+                <button @click="activeTab = 'dashboard'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'dashboard' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-chart-pie text-lg mb-1"></i><span class="text-[9px] font-bold">داشبورد</span></button>
+                <button @click="activeTab = 'stores'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'stores' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-store text-lg mb-1"></i><span class="text-[9px] font-bold">فروشگاه‌ها</span></button>
+                <button @click="activeTab = 'packages'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'packages' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-box-open text-lg mb-1"></i><span class="text-[9px] font-bold">پکیج‌ها</span></button>
+                <button @click="activeTab = 'reports'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'reports' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-chart-bar text-lg mb-1"></i><span class="text-[9px] font-bold">گزارشات</span></button>
+                <button @click="activeTab = 'users'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'users' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-users text-lg mb-1"></i><span class="text-[9px] font-bold">نمایندگان</span></button>
+                <button @click="activeTab = 'settings'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'settings' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-gear text-lg mb-1"></i><span class="text-[9px] font-bold">تنظیمات</span></button>
+            </div>
+        </nav>
     </div>
 
     <script>
-        async function login() {
-            let u = document.getElementById("username").value;
-            let p = document.getElementById("password").value;
-            let res = await fetch("/api/auth_check");
-            let data = await res.json();
-            if(u === data.username && p === data.password) {
-                document.getElementById("login-container").style.display = "none";
-                document.getElementById("dashboard").style.display = "block";
-            } else {
-                alert("نام کاربری یا رمز عبور اشتباه است!");
+        function panelApp() {
+            return {
+                loggedIn: false, activeTab: 'dashboard', 
+                loginUser: '', loginPass: '',
+                panelsList: [], storesList: [], packagesList: [], usersList: [],
+                stats: { total_configs: 0, active_stores: 0, store_stats: [] },
+                
+                serverClock: '', clockInterval: null,
+                editStoreId: null, editPackageId: null, editPanelId: null,
+
+                newPanel: { name: '', xui_url: '', xui_user: '', xui_pass: '' },
+                newStore: { name: '', panel_id: '', inbound_port: '', prefix: '', counter: '' },
+                newPackage: { store_id: '', name: '', volume: '', days: '', suffix: '' },
+                newUser: { chat_id: '', owner_name: '', allowed_stores: [] },
+                settingsData: { vpn_config: '' },
+                
+                reportParams: { store_id: '', start_date: '', end_date: '' },
+                reportResults: null,
+
+                async doLogin() {
+                    try {
+                        let res = await fetch('/api/auth_check');
+                        let data = await res.json();
+                        if(this.loginUser === data.username && this.loginPass === data.password) { 
+                            this.loggedIn = true; 
+                        } else { 
+                            alert('❌ نام کاربری یا رمز عبور اشتباه است!'); 
+                        }
+                    } catch(e) {
+                        alert('❌ خطا در برقراری ارتباط با سرور!');
+                    }
+                },
+
+                initData() { 
+                    this.fetchStats(); this.fetchPanels(); this.fetchStores(); this.fetchPackages(); this.fetchUsers(); this.fetchSettings(); 
+                },
+                
+                startClock(initialTime) {
+                    if(this.clockInterval) clearInterval(this.clockInterval);
+                    let t = new Date(initialTime.replace(' ', 'T'));
+                    this.serverClock = initialTime;
+                    this.clockInterval = setInterval(() => { t.setSeconds(t.getSeconds() + 1); this.serverClock = t.toISOString().replace('T', ' ').substring(0, 19); }, 1000);
+                },
+
+                async fetchStats() { let res = await fetch('/api/stats'); this.stats = await res.json(); this.startClock(this.stats.server_time); },
+                
+                downloadBackup() { window.location.href = '/api/backup'; },
+                async uploadBackup(event) {
+                    let file = event.target.files[0];
+                    if(!file) return;
+                    if(!confirm("⚠️ بازگردانی بکاپ، تمام اطلاعات فعلی را پاک و جایگزین می‌کند. مطمئن هستید؟")) return;
+                    let formData = new FormData(); formData.append("file", file);
+                    let res = await fetch('/api/restore', { method: 'POST', body: formData });
+                    if(res.ok) { alert('✅ بکاپ با موفقیت بازگردانی شد. سیستم ری‌استارت می‌شود.'); window.location.reload(); }
+                    else { alert('❌ خطا در بازگردانی'); }
+                },
+
+                async fetchPanels() { let res = await fetch('/api/panels'); this.panelsList = await res.json(); },
+                startEditPanel(p) { this.editPanelId = p.id; this.newPanel = { name: p.name, xui_url: p.xui_url, xui_user: p.xui_user, xui_pass: p.xui_pass }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                cancelEditPanel() { this.editPanelId = null; this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'' }; },
+                async savePanel() {
+                    if(!this.newPanel.name || !this.newPanel.xui_url) return alert("نام و آدرس سرور الزامی است");
+                    if(this.editPanelId) {
+                        await fetch('/api/panels/' + this.editPanelId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPanel) });
+                        this.cancelEditPanel();
+                    } else {
+                        await fetch('/api/panels', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPanel) });
+                        this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'' };
+                    }
+                    this.fetchPanels();
+                },
+                async deletePanel(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/panels/' + id, { method: 'DELETE' }); this.fetchPanels(); } },
+
+                async fetchStores() { let res = await fetch('/api/stores'); this.storesList = await res.json(); this.fetchStats(); },
+                startEditStore(store) { this.editStoreId = store.id; this.newStore = { name: store.name, panel_id: store.panel_id, inbound_port: store.inbound_port, prefix: store.prefix, counter: store.counter }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                cancelEditStore() { this.editStoreId = null; this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:'', counter:''}; },
+                async saveStore() {
+                    if(!this.newStore.name || !this.newStore.panel_id) return alert("انتخاب سرور و نام فروشگاه الزامی است");
+                    if(this.editStoreId) {
+                        await fetch('/api/stores/' + this.editStoreId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newStore) });
+                        this.cancelEditStore();
+                    } else {
+                        await fetch('/api/stores', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newStore) });
+                        this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:'', counter:''};
+                    }
+                    this.fetchStores();
+                },
+                async deleteStore(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/stores/' + id, { method: 'DELETE' }); this.fetchStores(); this.fetchPackages(); } },
+
+                async fetchPackages() { let res = await fetch('/api/packages'); this.packagesList = await res.json(); },
+                startEditPackage(pkg) { this.editPackageId = pkg.id; this.newPackage = { store_id: pkg.store_id, name: pkg.name, volume: pkg.volume, days: pkg.days, suffix: pkg.suffix }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                cancelEditPackage() { this.editPackageId = null; this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:''}; },
+                async savePackage() {
+                    if(!this.newPackage.store_id) return alert("فروشگاه را انتخاب کنید");
+                    if(this.editPackageId) {
+                        await fetch('/api/packages/' + this.editPackageId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPackage) });
+                        this.cancelEditPackage();
+                    } else {
+                        await fetch('/api/packages', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPackage) });
+                        this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:''};
+                    }
+                    this.fetchPackages();
+                },
+                async deletePackage(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/packages/' + id, { method: 'DELETE' }); this.fetchPackages(); } },
+
+                async fetchUsers() { let res = await fetch('/api/users'); this.usersList = await res.json(); },
+                async saveUser() {
+                    if(!this.newUser.chat_id) return alert("Chat ID الزامی است");
+                    await fetch('/api/users', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newUser) });
+                    this.newUser = {chat_id:'', owner_name:'', allowed_stores:[]}; this.fetchUsers();
+                },
+                async deleteUser(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/users/' + id, { method: 'DELETE' }); this.fetchUsers(); } },
+
+                async fetchSettings() { 
+                    try { let res = await fetch('/api/settings'); if(res.ok) { let data = await res.json(); this.settingsData.vpn_config = data.vpn_config || ''; } } catch(e) {}
+                },
+                async saveSettings() {
+                    await fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.settingsData) });
+                    alert("✅ کانفیگ مسیریابی ذخیره شد");
+                },
+
+                async fetchReport() {
+                    if(!this.reportParams.store_id || !this.reportParams.start_date || !this.reportParams.end_date) return alert("پر کردن تمامی فیلدها الزامی است.");
+                    let s_date = this.reportParams.start_date.replace('T', ' ') + ':00'; let e_date = this.reportParams.end_date.replace('T', ' ') + ':59';
+                    let res = await fetch(`/api/reports?store_id=${this.reportParams.store_id}&start_date=${s_date}&end_date=${e_date}`);
+                    this.reportResults = await res.json();
+                }
             }
         }
     </script>
