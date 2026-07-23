@@ -79,7 +79,6 @@ def setup_database():
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, vpn_config TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS panels (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, xui_url TEXT, xui_user TEXT, xui_pass TEXT)''')
     
-    # ارتقای اتوماتیک دیتابیس بدون پاک شدن اطلاعات قبلی
     try:
         cursor.execute("SELECT panel_id FROM stores LIMIT 1")
     except sqlite3.OperationalError:
@@ -104,7 +103,6 @@ class PackageCreate(BaseModel): store_id: int; name: str; volume: int; days: int
 class UserCreate(BaseModel): chat_id: str; owner_name: str; allowed_stores: List[int]
 class SettingsUpdate(BaseModel): vpn_config: Optional[str] = ""
 
-# --- Backup & Restore ---
 @app.get("/api/backup")
 def download_backup():
     file_name = f"panel_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.db"
@@ -116,7 +114,6 @@ async def restore_backup(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
     return {"status": "success"}
 
-# --- Stats ---
 @app.get("/api/stats")
 def get_stats():
     conn = get_db(); cursor = conn.cursor()
@@ -130,7 +127,6 @@ def get_stats():
     conn.close()
     return {"total_configs": total_configs, "active_stores": stores_count, "store_stats": store_stats, "server_time": server_time}
 
-# --- Panels (Servers) ---
 @app.get("/api/panels")
 def get_panels():
     conn = get_db(); cursor = conn.cursor()
@@ -159,7 +155,6 @@ def delete_panel(item_id: int):
     conn.commit(); conn.close()
     return {"status": "success"}
 
-# --- Settings ---
 @app.post("/api/settings")
 def update_settings(settings: SettingsUpdate):
     conn = get_db(); cursor = conn.cursor()
@@ -184,7 +179,6 @@ def get_settings():
         conn.close()
         return {}
 
-# --- Other APIs (Stores, Packages, Users, Reports) ---
 @app.get("/api/reports")
 def get_reports(store_id: int, start_date: str, end_date: str):
     conn = get_db(); cursor = conn.cursor()
@@ -287,12 +281,11 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=TARGET_PORT_PLACEHOLDER)
 EOF
 
-# Insert Target Port
 sed -i "s/TARGET_PORT_PLACEHOLDER/$INPUT_PANEL_PORT/g" /root/Proxy-Manager/main.py
 
 
 # -----------------------------------
-# Create bot.py (With http sub link change)
+# Create bot.py (Untouched)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/bot.py
 import asyncio
@@ -403,7 +396,6 @@ async def xray_proxy_context(vless_link):
         "outbounds": [outbound]
     }
     
-    # ذخیره کانفیگ برای خطایابی دستی
     config_path = '/root/Proxy-Manager/last_xray_config.json'
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
@@ -415,9 +407,8 @@ async def xray_proxy_context(vless_link):
             '/usr/local/bin/xray', 'run', '-c', config_path,
             stdout=log_file, stderr=log_file
         )
-        await asyncio.sleep(2) # دو ثانیه فرصت برای بوت شدن کامل Xray
+        await asyncio.sleep(2)
         
-        # اگر در همون ثانیه‌های اول کرش کرده باشه
         if process.returncode is not None:
             yield "error:xray_crashed"
             return
@@ -490,7 +481,6 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
         connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
         
         try:
-            # زمان انتظار 40 ثانیه تنظیم شد
             async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=40)) as session:
                 login_resp = await session.post(f"{url}/login", data={"username": user, "password": pwd})
                 login_text = await login_resp.text()
@@ -673,12 +663,11 @@ if __name__ == "__main__":
     asyncio.run(main())
 EOF
 
-# Insert Target Token
 sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.py
 
 
 # -----------------------------------
-# Create panel.html (With localStorage change)
+# Create panel.html (Fixed Header & Footer overlap using pt-20 & pb-28)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -697,7 +686,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
 <body x-data="panelApp()" x-init="initData()" class="antialiased w-full h-screen overflow-hidden flex flex-col">
 
     <!-- لاگین -->
-    <div x-show="!loggedIn" class="flex-1 flex items-center justify-center p-6 bg-dark-900" x-transition>
+    <div x-show="!loggedIn" class="flex-1 flex items-center justify-center p-6 bg-dark-900 z-50 absolute inset-0" x-transition>
         <div class="w-full max-w-sm bg-dark-800 rounded-3xl p-8 border border-dark-700 shadow-2xl relative overflow-hidden">
             <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-pistachio-500 rounded-full blur-[70px] opacity-20"></div>
             <div class="text-center mb-8 relative z-10">
@@ -714,7 +703,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
 
     <!-- اپلیکیشن اصلی -->
     <div x-show="loggedIn" class="flex flex-col h-screen w-full bg-dark-900" x-cloak>
-        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 sticky top-0 z-20">
+        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 fixed top-0 left-0 w-full z-30">
             <div>
                 <h1 class="text-lg font-bold text-white">
                     <span x-show="activeTab === 'dashboard'">داشبورد</span>
@@ -732,7 +721,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
             </div>
         </header>
 
-        <main class="flex-1 overflow-y-auto p-5 pb-36">
+        <!-- اصلاح فاصله بالا (pt-20) و پایین (pb-28) برای جلوگیری از رفتن محتوا زیر هدر و منو -->
+        <main class="flex-1 overflow-y-auto p-5 pt-20 pb-28">
             
             <!-- 1. داشبورد -->
             <div x-show="activeTab === 'dashboard'" class="space-y-4">
@@ -1188,7 +1178,6 @@ chmod +x /usr/local/bin/manager
 
 echo -e "\n${GREEN}[5/5] Configuring Linux services and finalizing setup...${NC}"
 
-# Web Panel Service
 cat << 'EOF' > /etc/systemd/system/proxy-panel.service
 [Unit]
 Description=Proxy Manager Web Panel
@@ -1204,7 +1193,6 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-# Bot Service
 cat << 'EOF' > /etc/systemd/system/proxy-bot.service
 [Unit]
 Description=Proxy Manager Telegram Bot
@@ -1224,7 +1212,6 @@ systemctl daemon-reload
 systemctl enable proxy-panel proxy-bot -q
 systemctl start proxy-panel proxy-bot
 
-# Extract IPv4 only
 SERVER_IP=$(curl -4 -s ifconfig.me)
 
 echo -e "\n${CYAN}=====================================================${NC}"
