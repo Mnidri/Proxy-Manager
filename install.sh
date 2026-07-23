@@ -285,7 +285,7 @@ sed -i "s/TARGET_PORT_PLACEHOLDER/$INPUT_PANEL_PORT/g" /root/Proxy-Manager/main.
 
 
 # -----------------------------------
-# Create bot.py (Untouched)
+# Create bot.py (Untouched, with http link)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/bot.py
 import asyncio
@@ -667,7 +667,7 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# Create panel.html (Fixed Header & Footer overlap using pt-20 & pb-28)
+# Create panel.html (With Flexbox Layout & Live Fetch Counter Fix)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -701,9 +701,11 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
         </div>
     </div>
 
-    <!-- اپلیکیشن اصلی -->
+    <!-- اپلیکیشن اصلی (Flex Container) -->
     <div x-show="loggedIn" class="flex flex-col h-screen w-full bg-dark-900" x-cloak>
-        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 fixed top-0 left-0 w-full z-30">
+        
+        <!-- هدر - Flex-shrink-0 برای جلوگیری از کوچک شدن -->
+        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 flex-shrink-0 z-20">
             <div>
                 <h1 class="text-lg font-bold text-white">
                     <span x-show="activeTab === 'dashboard'">داشبورد</span>
@@ -721,8 +723,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
             </div>
         </header>
 
-        <!-- اصلاح فاصله بالا (pt-20) و پایین (pb-28) برای جلوگیری از رفتن محتوا زیر هدر و منو -->
-        <main class="flex-1 overflow-y-auto p-5 pt-20 pb-28">
+        <!-- محتوای وسط - Flex-1 و overflow-auto برای پر کردن فضای خالی و اسکرول سالم -->
+        <main class="flex-1 overflow-y-auto p-5 pb-8 relative z-10">
             
             <!-- 1. داشبورد -->
             <div x-show="activeTab === 'dashboard'" class="space-y-4">
@@ -957,8 +959,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
             </div>
         </main>
 
-        <!-- منوی 6 تایی کامل -->
-        <nav class="fixed bottom-0 w-full bg-dark-800/95 backdrop-blur-md border-t border-dark-700 pb-2 pt-2 px-1 z-30">
+        <!-- نوار پایین - Flex-shrink-0 برای جلوگیری از کوچک شدن -->
+        <nav class="bg-dark-800/95 backdrop-blur-md border-t border-dark-700 pb-2 pt-2 px-1 flex-shrink-0 z-30">
             <div class="flex justify-between items-center h-14">
                 <button @click="activeTab = 'dashboard'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'dashboard' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-chart-pie text-lg mb-1"></i><span class="text-[9px] font-bold">داشبورد</span></button>
                 <button @click="activeTab = 'stores'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'stores' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-store text-lg mb-1"></i><span class="text-[9px] font-bold">فروشگاه‌ها</span></button>
@@ -1049,7 +1051,24 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 async deletePanel(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/panels/' + id, { method: 'DELETE' }); this.fetchPanels(); } },
 
                 async fetchStores() { let res = await fetch('/api/stores'); this.storesList = await res.json(); this.fetchStats(); },
-                startEditStore(store) { this.editStoreId = store.id; this.newStore = { name: store.name, panel_id: store.panel_id, inbound_port: store.inbound_port, prefix: store.prefix, counter: store.counter }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                
+                /* تابع Live Fetch برای ویرایش فروشگاه جهت رفع باگ برگشتن شمارنده به عقب */
+                async startEditStore(store) {
+                    try {
+                        let res = await fetch('/api/stores');
+                        let latestStores = await res.json();
+                        this.storesList = latestStores;
+                        let latestStore = latestStores.find(s => s.id === store.id) || store;
+                        this.editStoreId = latestStore.id;
+                        this.newStore = { name: latestStore.name, panel_id: latestStore.panel_id, inbound_port: latestStore.inbound_port, prefix: latestStore.prefix, counter: latestStore.counter };
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    } catch (e) {
+                        this.editStoreId = store.id;
+                        this.newStore = { name: store.name, panel_id: store.panel_id, inbound_port: store.inbound_port, prefix: store.prefix, counter: store.counter };
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                },
+                
                 cancelEditStore() { this.editStoreId = null; this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:'', counter:''}; },
                 async saveStore() {
                     if(!this.newStore.name || !this.newStore.panel_id) return alert("انتخاب سرور و نام فروشگاه الزامی است");
