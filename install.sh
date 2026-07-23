@@ -667,7 +667,7 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# Create panel.html (With Flexbox Layout & Live Fetch Counter Fix)
+# Create panel.html (With 100% Fixed Layout & Working Tabs)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -683,10 +683,10 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
     <script> tailwind.config = { theme: { extend: { fontFamily: { sans: ['Vazir', 'sans-serif'] }, colors: { dark: { 900: '#121212', 800: '#1e1e1e', 700: '#2c2c2c', 600: '#3d3d3d' }, pistachio: { 400: '#b4e650', 500: '#9cd33b', 600: '#85b927' } } } } } </script>
     <style> body { font-family: 'Vazir', sans-serif; background-color: #121212; color: #ffffff; -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 0px; background: transparent; } .glow-pistachio { box-shadow: 0 0 15px rgba(156, 211, 59, 0.3); } </style>
 </head>
-<body x-data="panelApp()" x-init="initData()" class="antialiased w-full h-screen overflow-hidden flex flex-col">
+<body x-data="panelApp()" x-init="initData()" class="antialiased w-full h-screen overflow-hidden flex flex-col bg-dark-900 text-white">
 
     <!-- لاگین -->
-    <div x-show="!loggedIn" class="flex-1 flex items-center justify-center p-6 bg-dark-900 z-50 absolute inset-0" x-transition>
+    <div x-show="!loggedIn" class="z-50 absolute inset-0 flex items-center justify-center p-6 bg-dark-900" x-transition>
         <div class="w-full max-w-sm bg-dark-800 rounded-3xl p-8 border border-dark-700 shadow-2xl relative overflow-hidden">
             <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-pistachio-500 rounded-full blur-[70px] opacity-20"></div>
             <div class="text-center mb-8 relative z-10">
@@ -701,11 +701,11 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
         </div>
     </div>
 
-    <!-- اپلیکیشن اصلی (Flex Container) -->
-    <div x-show="loggedIn" class="flex flex-col h-screen w-full bg-dark-900" x-cloak>
+    <!-- اپلیکیشن اصلی -->
+    <div x-show="loggedIn" class="w-full h-full relative" x-cloak>
         
-        <!-- هدر - Flex-shrink-0 برای جلوگیری از کوچک شدن -->
-        <header class="bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 flex-shrink-0 z-20">
+        <!-- نوار بالا: فیکس شده -->
+        <header class="fixed top-0 left-0 w-full bg-dark-800 px-6 py-4 flex justify-between items-center border-b border-dark-700 z-30">
             <div>
                 <h1 class="text-lg font-bold text-white">
                     <span x-show="activeTab === 'dashboard'">داشبورد</span>
@@ -723,8 +723,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
             </div>
         </header>
 
-        <!-- محتوای وسط - Flex-1 و overflow-auto برای پر کردن فضای خالی و اسکرول سالم -->
-        <main class="flex-1 overflow-y-auto p-5 pb-8 relative z-10">
+        <!-- محتوای وسط: پدینگ دار، اسکرول آزاد -->
+        <main class="w-full h-full overflow-y-auto p-5 pt-[85px] pb-[90px] relative z-10">
             
             <!-- 1. داشبورد -->
             <div x-show="activeTab === 'dashboard'" class="space-y-4">
@@ -959,8 +959,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
             </div>
         </main>
 
-        <!-- نوار پایین - Flex-shrink-0 برای جلوگیری از کوچک شدن -->
-        <nav class="bg-dark-800/95 backdrop-blur-md border-t border-dark-700 pb-2 pt-2 px-1 flex-shrink-0 z-30">
+        <!-- نوار پایین: فیکس شده -->
+        <nav class="fixed bottom-0 left-0 w-full bg-dark-800/95 backdrop-blur-md border-t border-dark-700 pb-2 pt-2 px-1 z-30">
             <div class="flex justify-between items-center h-14">
                 <button @click="activeTab = 'dashboard'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'dashboard' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-chart-pie text-lg mb-1"></i><span class="text-[9px] font-bold">داشبورد</span></button>
                 <button @click="activeTab = 'stores'" class="flex flex-col items-center justify-center w-full h-full transition-colors" :class="activeTab === 'stores' ? 'text-pistachio-500' : 'text-gray-500'"><i class="fa-solid fa-store text-lg mb-1"></i><span class="text-[9px] font-bold">فروشگاه‌ها</span></button>
@@ -1052,7 +1052,6 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
 
                 async fetchStores() { let res = await fetch('/api/stores'); this.storesList = await res.json(); this.fetchStats(); },
                 
-                /* تابع Live Fetch برای ویرایش فروشگاه جهت رفع باگ برگشتن شمارنده به عقب */
                 async startEditStore(store) {
                     try {
                         let res = await fetch('/api/stores');
