@@ -292,7 +292,7 @@ sed -i "s/TARGET_PORT_PLACEHOLDER/$INPUT_PANEL_PORT/g" /root/Proxy-Manager/main.
 
 
 # -----------------------------------
-# Create bot.py (Untouched)
+# Create bot.py (With http sub link change)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/bot.py
 import asyncio
@@ -546,7 +546,7 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                     sub_port = sub_settings.get("subPort", "")
                     sub_path = sub_settings.get("subPath", "/sub/")
                     
-                    proto = "https" if str(sub_port) in ["443", "2053", "2083", "2096", "8443"] else "http"
+                    proto = "http"
                     port_str = "" if str(sub_port) in ["80", "443", ""] else f":{sub_port}"
                     if not sub_path.startswith('/'): sub_path = '/' + sub_path
                     if not sub_path.endswith('/'): sub_path = sub_path + '/'
@@ -678,7 +678,7 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# Create panel.html (Untouched)
+# Create panel.html (With localStorage change)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -1006,6 +1006,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         let data = await res.json();
                         if(this.loginUser === data.username && this.loginPass === data.password) { 
                             this.loggedIn = true; 
+                            localStorage.setItem('panel_logged_in', 'true');
                         } else { 
                             alert('❌ نام کاربری یا رمز عبور اشتباه است!'); 
                         }
@@ -1015,6 +1016,9 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 },
 
                 initData() { 
+                    if(localStorage.getItem('panel_logged_in') === 'true') {
+                        this.loggedIn = true;
+                    }
                     this.fetchStats(); this.fetchPanels(); this.fetchStores(); this.fetchPackages(); this.fetchUsers(); this.fetchSettings(); 
                 },
                 
