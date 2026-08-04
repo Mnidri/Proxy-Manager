@@ -50,7 +50,7 @@ echo "{\"username\": \"$INPUT_ADMIN_USER\", \"password\": \"$INPUT_ADMIN_PASS\"}
 echo -e "\n${GREEN}[3/5] Writing system core files (main.py, bot.py, panel.html)...${NC}"
 
 # -----------------------------------
-# Create main.py (Untouched)
+# Create main.py (Independent Package Counters)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/main.py
 import os
@@ -73,12 +73,13 @@ def get_db():
 def setup_database():
     conn = get_db(); cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS stores (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, inbound_port INTEGER, prefix TEXT, counter INTEGER)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, name TEXT, volume INTEGER, days INTEGER, suffix TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, name TEXT, volume INTEGER, days INTEGER, suffix TEXT, counter INTEGER DEFAULT 1)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, owner_name TEXT, allowed_stores TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS configs_log (id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, package_name TEXT, volume INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, vpn_config TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS panels (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, xui_url TEXT, xui_user TEXT, xui_pass TEXT)''')
     
+    # Update for Panel logic
     try:
         cursor.execute("SELECT panel_id FROM stores LIMIT 1")
     except sqlite3.OperationalError:
@@ -93,13 +94,23 @@ def setup_database():
         except Exception:
             pass
 
+    # Upgrade script for existing DBs to add independent package counters
+    try:
+        cursor.execute("SELECT counter FROM packages LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE packages ADD COLUMN counter INTEGER DEFAULT 1")
+        try:
+            cursor.execute("UPDATE packages SET counter = (SELECT counter FROM stores WHERE stores.id = packages.store_id)")
+        except Exception:
+            pass
+
     conn.commit(); conn.close()
 
 setup_database()
 
 class PanelCreate(BaseModel): name: str; xui_url: str; xui_user: str; xui_pass: str
-class StoreCreate(BaseModel): name: str; panel_id: int; inbound_port: int; prefix: Optional[str] = ""; counter: int
-class PackageCreate(BaseModel): store_id: int; name: str; volume: int; days: int; suffix: Optional[str] = ""
+class StoreCreate(BaseModel): name: str; panel_id: int; inbound_port: int; prefix: Optional[str] = ""
+class PackageCreate(BaseModel): store_id: int; name: str; volume: int; days: int; suffix: Optional[str] = ""; counter: int = 1
 class UserCreate(BaseModel): chat_id: str; owner_name: str; allowed_stores: List[int]
 class SettingsUpdate(BaseModel): vpn_config: Optional[str] = ""
 
@@ -189,14 +200,14 @@ def get_reports(store_id: int, start_date: str, end_date: str):
 @app.post("/api/stores")
 def create_store(store: StoreCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("INSERT INTO stores (name, panel_id, inbound_port, prefix, counter) VALUES (?, ?, ?, ?, ?)", (store.name, store.panel_id, store.inbound_port, store.prefix, store.counter))
+    cursor.execute("INSERT INTO stores (name, panel_id, inbound_port, prefix) VALUES (?, ?, ?, ?)", (store.name, store.panel_id, store.inbound_port, store.prefix))
     conn.commit(); conn.close()
     return {"status": "success"}
 
 @app.put("/api/stores/{item_id}")
 def update_store(item_id: int, store: StoreCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("UPDATE stores SET name=?, panel_id=?, inbound_port=?, prefix=?, counter=? WHERE id=?", (store.name, store.panel_id, store.inbound_port, store.prefix, store.counter, item_id))
+    cursor.execute("UPDATE stores SET name=?, panel_id=?, inbound_port=?, prefix=? WHERE id=?", (store.name, store.panel_id, store.inbound_port, store.prefix, item_id))
     conn.commit(); conn.close()
     return {"status": "success"}
 
@@ -217,14 +228,14 @@ def delete_store(item_id: int):
 @app.post("/api/packages")
 def create_package(pkg: PackageCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("INSERT INTO packages (store_id, name, volume, days, suffix) VALUES (?, ?, ?, ?, ?)", (pkg.store_id, pkg.name, pkg.volume, pkg.days, pkg.suffix))
+    cursor.execute("INSERT INTO packages (store_id, name, volume, days, suffix, counter) VALUES (?, ?, ?, ?, ?, ?)", (pkg.store_id, pkg.name, pkg.volume, pkg.days, pkg.suffix, pkg.counter))
     conn.commit(); conn.close()
     return {"status": "success"}
 
 @app.put("/api/packages/{item_id}")
 def update_package(item_id: int, pkg: PackageCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("UPDATE packages SET store_id=?, name=?, volume=?, days=?, suffix=? WHERE id=?", (pkg.store_id, pkg.name, pkg.volume, pkg.days, pkg.suffix, item_id))
+    cursor.execute("UPDATE packages SET store_id=?, name=?, volume=?, days=?, suffix=?, counter=? WHERE id=?", (pkg.store_id, pkg.name, pkg.volume, pkg.days, pkg.suffix, pkg.counter, item_id))
     conn.commit(); conn.close()
     return {"status": "success"}
 
@@ -285,7 +296,7 @@ sed -i "s/TARGET_PORT_PLACEHOLDER/$INPUT_PANEL_PORT/g" /root/Proxy-Manager/main.
 
 
 # -----------------------------------
-# Create bot.py (Untouched, with http link)
+# Create bot.py (Independent Package Counter tracking)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/bot.py
 import asyncio
@@ -627,7 +638,9 @@ async def generate_configs(callback: types.CallbackQuery):
     vpn_config = settings['vpn_config'] if settings and settings['vpn_config'] else None
 
     await callback.message.edit_text(f"⏳ در حال تولید کانفیگ از سرور {panel['name']}...\nلطفاً صبور باشید (ممکن است تا ۴۰ ثانیه طول بکشد).")
-    current_counter = store['counter']
+    
+    # Counter logic updated: Now tracking via packages instead of stores
+    current_counter = pkg['counter']
     
     for i in range(qty):
         prefix = store['prefix'] if store['prefix'] else ""
@@ -650,7 +663,8 @@ async def generate_configs(callback: types.CallbackQuery):
         else:
             await callback.message.answer(f"⚠️ {result}")
 
-    conn.execute("UPDATE stores SET counter=? WHERE id=?", (current_counter, store['id']))
+    # Counter logic updated: Saving back to the specific package
+    conn.execute("UPDATE packages SET counter=? WHERE id=?", (current_counter, pkg['id']))
     conn.commit()
     conn.close()
     await callback.message.delete()
@@ -667,7 +681,7 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# Create panel.html (With 100% Fixed Layout & Working Tabs)
+# Create panel.html (With Package Counter Logic)
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -761,7 +775,6 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         <div><label class="block text-xs text-gray-400 mb-1">پورت X-UI</label><input x-model="newStore.inbound_port" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
                         <div><label class="block text-xs text-gray-400 mb-1">پیشوند (انگلیسی)</label><input x-model="newStore.prefix" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
                     </div>
-                    <div><label class="block text-xs text-gray-400 mb-1">شروع کانتر</label><input x-model="newStore.counter" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
                     
                     <div class="flex gap-2 mt-2">
                         <button @click="saveStore()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio" x-text="editStoreId ? 'ثبت تغییرات' : 'ذخیره فروشگاه'"></button>
@@ -803,7 +816,10 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         <div><label class="block text-xs text-gray-400 mb-1">حجم (GB)</label><input x-model="newPackage.volume" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
                         <div><label class="block text-xs text-gray-400 mb-1">زمان (روز)</label><input x-model="newPackage.days" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
                     </div>
-                    <div><label class="block text-xs text-gray-400 mb-1">پسوند اختصاصی (انگلیسی)</label><input x-model="newPackage.suffix" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div><label class="block text-xs text-gray-400 mb-1">پسوند اختصاصی</label><input x-model="newPackage.suffix" type="text" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                        <div><label class="block text-xs text-gray-400 mb-1">شروع کانتر</label><input x-model="newPackage.counter" type="number" class="w-full bg-dark-900 border border-dark-600 rounded-xl p-3 text-white outline-none" dir="ltr"></div>
+                    </div>
                     <div class="flex gap-2 mt-2">
                         <button @click="savePackage()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3.5 rounded-xl glow-pistachio" x-text="editPackageId ? 'ثبت تغییرات' : 'افزودن پکیج'"></button>
                         <button x-show="editPackageId" @click="cancelEditPackage()" class="w-1/3 bg-dark-700 text-gray-400 border border-dark-600 font-bold py-3.5 rounded-xl hover:text-white">لغو</button>
@@ -821,7 +837,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                                 <div x-show="open" class="p-3 space-y-2 border-t border-dark-600">
                                     <template x-for="pkg in packagesList.filter(p => p.store_id === store.id)" :key="pkg.id">
                                         <div class="flex justify-between items-center bg-dark-800 p-3 rounded-xl border border-dark-700">
-                                            <div><p class="text-sm font-bold text-white" x-text="pkg.name"></p><p class="text-[11px] text-gray-400 mt-1"><span x-text="pkg.volume"></span> گیگ | <span x-text="pkg.days"></span> روز</p></div>
+                                            <div><p class="text-sm font-bold text-white" x-text="pkg.name"></p><p class="text-[11px] text-gray-400 mt-1"><span x-text="pkg.volume"></span> گیگ | <span x-text="pkg.days"></span> روز | <span class="text-pistachio-500">کانتر: <span x-text="pkg.counter || 1"></span></span></p></div>
                                             <div class="flex gap-2">
                                                 <button @click="startEditPackage(pkg)" class="text-blue-400 hover:bg-blue-500/20 p-2 rounded-lg transition-colors bg-dark-900"><i class="fa-solid fa-pen"></i></button>
                                                 <button @click="deletePackage(pkg.id)" class="text-red-500 hover:bg-red-500/20 p-2 rounded-lg transition-colors bg-dark-900"><i class="fa-solid fa-trash"></i></button>
@@ -984,8 +1000,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 editStoreId: null, editPackageId: null, editPanelId: null,
 
                 newPanel: { name: '', xui_url: '', xui_user: '', xui_pass: '' },
-                newStore: { name: '', panel_id: '', inbound_port: '', prefix: '', counter: '' },
-                newPackage: { store_id: '', name: '', volume: '', days: '', suffix: '' },
+                newStore: { name: '', panel_id: '', inbound_port: '', prefix: '' },
+                newPackage: { store_id: '', name: '', volume: '', days: '', suffix: '', counter: 1 },
                 newUser: { chat_id: '', owner_name: '', allowed_stores: [] },
                 settingsData: { vpn_config: '' },
                 
@@ -1052,23 +1068,13 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
 
                 async fetchStores() { let res = await fetch('/api/stores'); this.storesList = await res.json(); this.fetchStats(); },
                 
-                async startEditStore(store) {
-                    try {
-                        let res = await fetch('/api/stores');
-                        let latestStores = await res.json();
-                        this.storesList = latestStores;
-                        let latestStore = latestStores.find(s => s.id === store.id) || store;
-                        this.editStoreId = latestStore.id;
-                        this.newStore = { name: latestStore.name, panel_id: latestStore.panel_id, inbound_port: latestStore.inbound_port, prefix: latestStore.prefix, counter: latestStore.counter };
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                    } catch (e) {
-                        this.editStoreId = store.id;
-                        this.newStore = { name: store.name, panel_id: store.panel_id, inbound_port: store.inbound_port, prefix: store.prefix, counter: store.counter };
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }
+                startEditStore(store) {
+                    this.editStoreId = store.id;
+                    this.newStore = { name: store.name, panel_id: store.panel_id, inbound_port: store.inbound_port, prefix: store.prefix };
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                 },
                 
-                cancelEditStore() { this.editStoreId = null; this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:'', counter:''}; },
+                cancelEditStore() { this.editStoreId = null; this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:''}; },
                 async saveStore() {
                     if(!this.newStore.name || !this.newStore.panel_id) return alert("انتخاب سرور و نام فروشگاه الزامی است");
                     if(this.editStoreId) {
@@ -1076,15 +1082,32 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         this.cancelEditStore();
                     } else {
                         await fetch('/api/stores', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newStore) });
-                        this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:'', counter:''};
+                        this.newStore = {name:'', panel_id:'', inbound_port:'', prefix:''};
                     }
                     this.fetchStores();
                 },
                 async deleteStore(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/stores/' + id, { method: 'DELETE' }); this.fetchStores(); this.fetchPackages(); } },
 
                 async fetchPackages() { let res = await fetch('/api/packages'); this.packagesList = await res.json(); },
-                startEditPackage(pkg) { this.editPackageId = pkg.id; this.newPackage = { store_id: pkg.store_id, name: pkg.name, volume: pkg.volume, days: pkg.days, suffix: pkg.suffix }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
-                cancelEditPackage() { this.editPackageId = null; this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:''}; },
+                
+                /* Live Fetch Counter Logic moved to Packages */
+                async startEditPackage(pkg) {
+                    try {
+                        let res = await fetch('/api/packages');
+                        let latestPackages = await res.json();
+                        this.packagesList = latestPackages;
+                        let latestPkg = latestPackages.find(p => p.id === pkg.id) || pkg;
+                        this.editPackageId = latestPkg.id;
+                        this.newPackage = { store_id: latestPkg.store_id, name: latestPkg.name, volume: latestPkg.volume, days: latestPkg.days, suffix: latestPkg.suffix, counter: latestPkg.counter || 1 };
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    } catch (e) {
+                        this.editPackageId = pkg.id;
+                        this.newPackage = { store_id: pkg.store_id, name: pkg.name, volume: pkg.volume, days: pkg.days, suffix: pkg.suffix, counter: pkg.counter || 1 };
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                },
+                
+                cancelEditPackage() { this.editPackageId = null; this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:'', counter: 1}; },
                 async savePackage() {
                     if(!this.newPackage.store_id) return alert("فروشگاه را انتخاب کنید");
                     if(this.editPackageId) {
@@ -1092,7 +1115,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         this.cancelEditPackage();
                     } else {
                         await fetch('/api/packages', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPackage) });
-                        this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:''};
+                        this.newPackage = {store_id:'', name:'', volume:'', days:'', suffix:'', counter: 1};
                     }
                     this.fetchPackages();
                 },
