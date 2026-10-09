@@ -382,7 +382,6 @@ async def xray_proxy_context(vpn_config):
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
         )
         
-        # Check if port is ready
         connected = False
         for _ in range(30):
             try:
@@ -469,9 +468,13 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
         
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=40)) as session:
-                # Extract CSRF Token for Sanaei v3+
+                session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+                    "Accept": "application/json, text/plain, */*"
+                })
+
                 try:
-                    res_get = await session.get(f"{url}/")
+                    res_get = await session.get(f"{url}/", ssl=False)
                     text = await res_get.text()
                     match = re.search(r'name="csrf-token"\s+content="([^"]+)"', text, re.IGNORECASE)
                     if match: session.headers.update({"X-CSRF-Token": match.group(1)})
@@ -484,21 +487,26 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                     "Referer": f"{url}/"
                 })
 
-                login_resp = await session.post(f"{url}/login", data={"username": user, "password": pwd})
+                login_resp = await session.post(f"{url}/login", data={"username": user, "password": pwd}, ssl=False)
                 login_text = await login_resp.text()
                 try:
                     if not json.loads(login_text).get("success"): return False, "❌ لاگین ناموفق به سرور"
                 except: return False, "❌ آدرس سرور در پنل اشتباه است."
 
+                raw_cookies = login_resp.headers.getall('Set-Cookie', [])
+                if raw_cookies:
+                    cookie_header = "; ".join([rc.split(';')[0] for rc in raw_cookies])
+                    session.headers.update({"Cookie": cookie_header})
+
                 session.headers.update({"Content-Type": "application/json"})
                 
                 sub_settings = {}
-                settings_resp = await session.post(f"{url}/panel/setting/all")
-                if settings_resp.status == 404: settings_resp = await session.get(f"{url}/panel/setting/all")
+                settings_resp = await session.post(f"{url}/panel/setting/all", ssl=False)
+                if settings_resp.status == 404: settings_resp = await session.get(f"{url}/panel/setting/all", ssl=False)
                 try: sub_settings = (await settings_resp.json()).get("obj", {})
                 except: pass
 
-                inbounds_resp = await session.get(f"{url}/panel/api/inbounds/list")
+                inbounds_resp = await session.get(f"{url}/panel/api/inbounds/list", ssl=False)
                 if inbounds_resp.status != 200: return False, "❌ خطا در دریافت پورت‌ها"
                 
                 inbounds_data = await inbounds_resp.json()
@@ -528,13 +536,12 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                 new_client = {"id": client_uuid, "alterId": 0, "email": remark, "limitIp": 0, "totalGB": total_bytes, "expiryTime": expiry_time, "enable": True, "subId": sub_id}
                 
                 payload = {"id": target_inbound["id"], "settings": json.dumps({"clients": [new_client]})}
-                add_resp = await session.post(f"{url}/panel/api/inbounds/addClient", json=payload)
+                add_resp = await session.post(f"{url}/panel/api/inbounds/addClient", json=payload, ssl=False)
                 
                 success_added = False
                 try: success_added = (await add_resp.json()).get("success", False)
                 except: success_added = (add_resp.status == 200)
                 
-                # Fallback for older panels or restricted environments
                 if not success_added:
                     old_settings = json.loads(target_inbound.get("settings", "{}"))
                     clients_list = old_settings.get("clients", [])
@@ -548,7 +555,7 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                             target_inbound_copy[k] = json.dumps(target_inbound_copy[k])
                     target_inbound_copy["enable"] = bool(target_inbound_copy.get("enable", True))
                     
-                    upd_resp = await session.post(f"{url}/panel/api/inbounds/update/{target_inbound['id']}", json=target_inbound_copy)
+                    upd_resp = await session.post(f"{url}/panel/api/inbounds/update/{target_inbound['id']}", json=target_inbound_copy, ssl=False)
                     if upd_resp.status == 200: success_added = True
 
                 if success_added:
@@ -736,7 +743,7 @@ async def generate_configs(callback: types.CallbackQuery):
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("INSERT INTO configs_log (store_id, package_name, volume, created_at) VALUES (?, ?, ?, ?)", (store['id'], pkg['name'], pkg['volume'], now))
             msg = f"✅ کانفیگ شما ساخته شد:\n\n{result['actual_config']}\n\n🔗 لینک سابسکریپشن:\n{result['sub_link']}\n\n🔢 کد اختصاصی: {smart_counter}"
-            await callback.message.answer(msg)
+            await callback.message.answer(msg, parse_mode="Markdown")
             current_counter = smart_counter + 1
         else:
             await callback.message.answer(f"⚠️ {result}")
