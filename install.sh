@@ -50,7 +50,7 @@ echo "{\"username\": \"$INPUT_ADMIN_USER\", \"password\": \"$INPUT_ADMIN_PASS\"}
 echo -e "\n${GREEN}[3/5] Writing system core files (main.py, bot.py, panel.html)...${NC}"
 
 # -----------------------------------
-# Create main.py (Independent Package Counters)
+# Create main.py
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/main.py
 import os
@@ -77,24 +77,19 @@ def setup_database():
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, owner_name TEXT, allowed_stores TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS configs_log (id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, package_name TEXT, volume INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, vpn_config TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS panels (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, xui_url TEXT, xui_user TEXT, xui_pass TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS panels (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, xui_url TEXT, xui_user TEXT, xui_pass TEXT, vpn_config TEXT DEFAULT '', sub_url TEXT DEFAULT '')''')
     
-    # Update for Panel logic
     try:
         cursor.execute("SELECT panel_id FROM stores LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE stores ADD COLUMN panel_id INTEGER DEFAULT 0")
-        try:
-            cursor.execute("SELECT xui_url, xui_user, xui_pass FROM settings LIMIT 1")
-            old_setting = cursor.fetchone()
-            if old_setting and 'xui_url' in old_setting.keys() and old_setting['xui_url']:
-                cursor.execute("INSERT INTO panels (name, xui_url, xui_user, xui_pass) VALUES (?, ?, ?, ?)", 
-                              ("سرور اصلی", old_setting['xui_url'], old_setting['xui_user'], old_setting['xui_pass']))
-                cursor.execute("UPDATE stores SET panel_id = (SELECT id FROM panels LIMIT 1)")
-        except Exception:
-            pass
 
-    # Upgrade script for existing DBs to add independent package counters
+    try:
+        cursor.execute("SELECT vpn_config FROM panels LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE panels ADD COLUMN vpn_config TEXT DEFAULT ''")
+        cursor.execute("ALTER TABLE panels ADD COLUMN sub_url TEXT DEFAULT ''")
+
     try:
         cursor.execute("SELECT counter FROM packages LIMIT 1")
     except sqlite3.OperationalError:
@@ -108,7 +103,7 @@ def setup_database():
 
 setup_database()
 
-class PanelCreate(BaseModel): name: str; xui_url: str; xui_user: str; xui_pass: str
+class PanelCreate(BaseModel): name: str; xui_url: str; xui_user: str; xui_pass: str; vpn_config: Optional[str] = ""; sub_url: Optional[str] = ""
 class StoreCreate(BaseModel): name: str; panel_id: int; inbound_port: int; prefix: Optional[str] = ""
 class PackageCreate(BaseModel): store_id: int; name: str; volume: int; days: int; suffix: Optional[str] = ""; counter: int = 1
 class UserCreate(BaseModel): chat_id: str; owner_name: str; allowed_stores: List[int]
@@ -148,14 +143,16 @@ def get_panels():
 @app.post("/api/panels")
 def create_panel(panel: PanelCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("INSERT INTO panels (name, xui_url, xui_user, xui_pass) VALUES (?, ?, ?, ?)", (panel.name, panel.xui_url, panel.xui_user, panel.xui_pass))
+    cursor.execute("INSERT INTO panels (name, xui_url, xui_user, xui_pass, vpn_config, sub_url) VALUES (?, ?, ?, ?, ?, ?)", 
+                   (panel.name, panel.xui_url, panel.xui_user, panel.xui_pass, panel.vpn_config, panel.sub_url))
     conn.commit(); conn.close()
     return {"status": "success"}
 
 @app.put("/api/panels/{item_id}")
 def update_panel(item_id: int, panel: PanelCreate):
     conn = get_db(); cursor = conn.cursor()
-    cursor.execute("UPDATE panels SET name=?, xui_url=?, xui_user=?, xui_pass=? WHERE id=?", (panel.name, panel.xui_url, panel.xui_user, panel.xui_pass, item_id))
+    cursor.execute("UPDATE panels SET name=?, xui_url=?, xui_user=?, xui_pass=?, vpn_config=?, sub_url=? WHERE id=?", 
+                   (panel.name, panel.xui_url, panel.xui_user, panel.xui_pass, panel.vpn_config, panel.sub_url, item_id))
     conn.commit(); conn.close()
     return {"status": "success"}
 
@@ -165,30 +162,6 @@ def delete_panel(item_id: int):
     cursor.execute("DELETE FROM panels WHERE id = ?", (item_id,))
     conn.commit(); conn.close()
     return {"status": "success"}
-
-@app.post("/api/settings")
-def update_settings(settings: SettingsUpdate):
-    conn = get_db(); cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE settings SET vpn_config=? WHERE id=(SELECT id FROM settings LIMIT 1)", (settings.vpn_config,))
-        if cursor.rowcount == 0:
-            cursor.execute("INSERT INTO settings (vpn_config) VALUES (?)", (settings.vpn_config,))
-    except:
-        pass
-    conn.commit(); conn.close()
-    return {"status": "success"}
-
-@app.get("/api/settings")
-def get_settings():
-    conn = get_db(); cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT vpn_config FROM settings LIMIT 1")
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else {}
-    except:
-        conn.close()
-        return {}
 
 @app.get("/api/reports")
 def get_reports(store_id: int, start_date: str, end_date: str):
@@ -294,9 +267,8 @@ EOF
 
 sed -i "s/TARGET_PORT_PLACEHOLDER/$INPUT_PANEL_PORT/g" /root/Proxy-Manager/main.py
 
-
 # -----------------------------------
-# Create bot.py (Independent Package Counter tracking)
+# Create bot.py
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/bot.py
 import asyncio
@@ -309,11 +281,15 @@ import urllib.parse
 from urllib.parse import urlparse, parse_qs
 import os
 import socket
+import base64
+import re
 from contextlib import asynccontextmanager
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from aiohttp_socks import ProxyConnector
 
 BOT_TOKEN = "TARGET_TOKEN_PLACEHOLDER"
@@ -331,73 +307,61 @@ def get_free_port():
         s.bind(('', 0))
         return s.getsockname()[1]
 
-def build_xray_outbound(vless_link):
-    vless_link = vless_link.strip()
-    if not vless_link.lower().startswith("vless://"): 
-        return None
-        
-    vless_link = "vless://" + vless_link[8:]
-    parsed = urllib.parse.urlparse(vless_link)
+def build_xray_outbound(link):
+    if not link: return None
+    link = link.strip()
+    proto = link.split("://")[0].lower()
     
-    uuid_val = parsed.username
-    address = parsed.hostname
-    port = parsed.port
-    
-    if not uuid_val or not address or not port:
-        return None
-        
-    qs = parse_qs(parsed.query, keep_blank_values=True)
-    
-    def get_qs(key, default=""): 
-        val = qs.get(key, [""])[0]
-        return val if val != "" else default
-        
-    network = get_qs("type", "tcp")
-    security = get_qs("security", "none")
-    sni = get_qs("sni", "")
-    fp = get_qs("fp", "")
-    pbk = get_qs("pbk", "")
-    sid = get_qs("sid", "")
-    path = get_qs("path", "")
-    host = get_qs("host", "")
-    
-    outbound = {
-        "protocol": "vless",
-        "settings": {
-            "vnext": [{
-                "address": address, 
-                "port": int(port), 
-                "users": [{"id": uuid_val, "encryption": "none"}]
-            }]
-        },
-        "streamSettings": {"network": network, "security": security}
-    }
-    
-    if security == "tls":
-        outbound["streamSettings"]["tlsSettings"] = {"serverName": sni or host or address, "fingerprint": fp}
-    elif security == "reality":
-        outbound["streamSettings"]["realitySettings"] = {"serverName": sni or host or address, "fingerprint": fp, "publicKey": pbk, "shortId": sid, "spiderX": get_qs("spx", "/")}
-        
-    if network == "ws":
-        outbound["streamSettings"]["wsSettings"] = {"path": path, "headers": {"Host": host} if host else {}}
-    elif network == "grpc":
-        outbound["streamSettings"]["grpcSettings"] = {"serviceName": get_qs("serviceName", ""), "multiMode": get_qs("mode", "") == "multi"}
-    elif network == "tcp":
-        header_type = get_qs("headerType", "none")
-        if header_type == "http":
-            outbound["streamSettings"]["tcpSettings"] = {"header": {"type": "http", "request": {"path": [path] if path else ["/"], "headers": {"Host": [host]} if host else {}}}}
-            
-    return outbound
+    if proto == "vmess":
+        try:
+            b64_data = link.split("://")[1]
+            pad = '=' * (-len(b64_data) % 4)
+            v_data = json.loads(base64.b64decode(b64_data + pad).decode('utf-8'))
+            outbound = {
+                "protocol": "vmess",
+                "settings": {"vnext": [{"address": v_data.get("add"), "port": int(v_data.get("port", 443)), "users": [{"id": v_data.get("id"), "alterId": int(v_data.get("aid", 0)), "security": "auto"}]}]},
+                "streamSettings": {"network": v_data.get("net", "tcp"), "security": "tls" if str(v_data.get("tls")) in ["tls", "1"] else "none"}
+            }
+            if v_data.get("net") == "ws": outbound["streamSettings"]["wsSettings"] = {"path": v_data.get("path", "/"), "headers": {"Host": v_data.get("host", "")}}
+            elif v_data.get("net") == "grpc": outbound["streamSettings"]["grpcSettings"] = {"serviceName": v_data.get("path", "")}
+            return outbound
+        except Exception: return None
+
+    elif proto == "vless":
+        try:
+            link = "vless://" + link.split("://")[-1]
+            parsed = urllib.parse.urlparse(link)
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            def get_qs(key, default=""): return qs.get(key, [""])[0] or default
+
+            flow_val, sec_val, net_val, enc_val = get_qs("flow", ""), get_qs("security", "none"), get_qs("type", "tcp"), get_qs("encryption", "none")
+            user_obj = {"id": parsed.username, "encryption": enc_val}
+            if flow_val: user_obj["flow"] = flow_val
+
+            outbound = {
+                "protocol": "vless",
+                "settings": {"vnext": [{"address": parsed.hostname, "port": int(parsed.port), "users": [user_obj]}]},
+                "streamSettings": {"network": net_val, "security": sec_val}
+            }
+
+            if sec_val == "tls": outbound["streamSettings"]["tlsSettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", "chrome")}
+            elif sec_val == "reality": outbound["streamSettings"]["realitySettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", "chrome"), "publicKey": get_qs("pbk", ""), "shortId": get_qs("sid", ""), "spiderX": get_qs("spx", "/")}
+
+            if net_val == "ws": outbound["streamSettings"]["wsSettings"] = {"path": get_qs("path", "/"), "headers": {"Host": get_qs("host", "")}}
+            elif net_val == "grpc": outbound["streamSettings"]["grpcSettings"] = {"serviceName": get_qs("serviceName", "")}
+            return outbound
+        except Exception: return None
+    return None
 
 @asynccontextmanager
-async def xray_proxy_context(vless_link):
-    if not vless_link or not vless_link.strip().lower().startswith("vless://"):
+async def xray_proxy_context(vpn_config):
+    if not vpn_config or not vpn_config.strip():
         yield None
         return
         
-    outbound = build_xray_outbound(vless_link)
+    outbound = build_xray_outbound(vpn_config)
     if not outbound:
-        yield None
+        yield "error:xray_crashed"
         return
         
     local_port = get_free_port()
@@ -407,20 +371,30 @@ async def xray_proxy_context(vless_link):
         "outbounds": [outbound]
     }
     
-    config_path = '/root/Proxy-Manager/last_xray_config.json'
+    config_path = f'/tmp/xray_tunnel_{local_port}.json'
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
         
-    log_file = open('/root/Proxy-Manager/xray_tunnel.log', 'w')
     process = None
     try:
         process = await asyncio.create_subprocess_exec(
             '/usr/local/bin/xray', 'run', '-c', config_path,
-            stdout=log_file, stderr=log_file
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
         )
-        await asyncio.sleep(2)
         
-        if process.returncode is not None:
+        # Check if port is ready
+        connected = False
+        for _ in range(30):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    if s.connect_ex(('127.0.0.1', local_port)) == 0:
+                        connected = True
+                        break
+            except: pass
+            await asyncio.sleep(0.1)
+            
+        if not connected or process.returncode is not None:
             yield "error:xray_crashed"
             return
             
@@ -430,7 +404,9 @@ async def xray_proxy_context(vless_link):
         if process:
             try: process.terminate(); await process.wait()
             except: pass
-        log_file.close()
+        if os.path.exists(config_path):
+            try: os.remove(config_path)
+            except: pass
 
 def build_vless_link(client_uuid, default_ip, inbound_port, stream_settings, remark):
     net = stream_settings.get("network", "tcp")
@@ -480,36 +456,49 @@ def build_vless_link(client_uuid, default_ip, inbound_port, stream_settings, rem
     encoded_remark = urllib.parse.quote(remark)
     return f"vless://{client_uuid}@{server_ip}:{port}?{query}#{encoded_remark}"
 
-async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, days, start_counter, vpn_config=None):
+async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, days, start_counter, vpn_config=None, sub_base_url=None):
     url = url.rstrip('/') 
     parsed_url = urlparse(url)
     server_ip_or_domain = parsed_url.hostname 
     
     async with xray_proxy_context(vpn_config) as proxy_url:
         if proxy_url == "error:xray_crashed":
-            return False, "❌ هسته Xray کرش کرد! مشکل در ساختار کانفیگ مسیریاب است."
+            return False, "❌ هسته Xray کرش کرد! ساختار کانفیگ مسیریاب اشتباه است."
             
         connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
         
         try:
             async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=40)) as session:
+                # Extract CSRF Token for Sanaei v3+
+                try:
+                    res_get = await session.get(f"{url}/")
+                    text = await res_get.text()
+                    match = re.search(r'name="csrf-token"\s+content="([^"]+)"', text, re.IGNORECASE)
+                    if match: session.headers.update({"X-CSRF-Token": match.group(1)})
+                except: pass
+                
+                session.headers.update({
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Origin": f"{parsed_url.scheme}://{parsed_url.netloc}",
+                    "Referer": f"{url}/"
+                })
+
                 login_resp = await session.post(f"{url}/login", data={"username": user, "password": pwd})
                 login_text = await login_resp.text()
                 try:
                     if not json.loads(login_text).get("success"): return False, "❌ لاگین ناموفق به سرور"
                 except: return False, "❌ آدرس سرور در پنل اشتباه است."
 
-                raw_cookies = login_resp.headers.getall('Set-Cookie', [])
-                cookie_header = "; ".join([rc.split(';')[0] for rc in raw_cookies])
-                headers = {"Accept": "application/json", "Cookie": cookie_header}
-
+                session.headers.update({"Content-Type": "application/json"})
+                
                 sub_settings = {}
-                settings_resp = await session.post(f"{url}/panel/setting/all", headers=headers)
-                if settings_resp.status == 404: settings_resp = await session.get(f"{url}/panel/setting/all", headers=headers)
+                settings_resp = await session.post(f"{url}/panel/setting/all")
+                if settings_resp.status == 404: settings_resp = await session.get(f"{url}/panel/setting/all")
                 try: sub_settings = (await settings_resp.json()).get("obj", {})
                 except: pass
 
-                inbounds_resp = await session.get(f"{url}/panel/api/inbounds/list", headers=headers)
+                inbounds_resp = await session.get(f"{url}/panel/api/inbounds/list")
                 if inbounds_resp.status != 200: return False, "❌ خطا در دریافت پورت‌ها"
                 
                 inbounds_data = await inbounds_resp.json()
@@ -534,15 +523,35 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                 client_uuid = str(uuid.uuid4())
                 sub_id = str(uuid.uuid4())[:16]
                 total_bytes = int(volume_gb) * 1073741824 if volume_gb > 0 else 0
-                expiry_time = -(days * 86400 * 1000) if days > 0 else 0
+                expiry_time = int(datetime.datetime.now().timestamp() * 1000) + (days * 86400 * 1000) if days > 0 else 0
                 
                 new_client = {"id": client_uuid, "alterId": 0, "email": remark, "limitIp": 0, "totalGB": total_bytes, "expiryTime": expiry_time, "enable": True, "subId": sub_id}
                 
                 payload = {"id": target_inbound["id"], "settings": json.dumps({"clients": [new_client]})}
-                add_resp = await session.post(f"{url}/panel/api/inbounds/addClient", json=payload, headers=headers)
-                add_text = await add_resp.text()
+                add_resp = await session.post(f"{url}/panel/api/inbounds/addClient", json=payload)
                 
-                if json.loads(add_text).get("success"):
+                success_added = False
+                try: success_added = (await add_resp.json()).get("success", False)
+                except: success_added = (add_resp.status == 200)
+                
+                # Fallback for older panels or restricted environments
+                if not success_added:
+                    old_settings = json.loads(target_inbound.get("settings", "{}"))
+                    clients_list = old_settings.get("clients", [])
+                    clients_list.append(new_client)
+                    
+                    target_inbound_copy = target_inbound.copy()
+                    target_inbound_copy.pop("clientStats", None)
+                    target_inbound_copy["settings"] = json.dumps({"clients": clients_list})
+                    for k in ['streamSettings', 'sniffing', 'allocate']:
+                        if k in target_inbound_copy and isinstance(target_inbound_copy[k], dict):
+                            target_inbound_copy[k] = json.dumps(target_inbound_copy[k])
+                    target_inbound_copy["enable"] = bool(target_inbound_copy.get("enable", True))
+                    
+                    upd_resp = await session.post(f"{url}/panel/api/inbounds/update/{target_inbound['id']}", json=target_inbound_copy)
+                    if upd_resp.status == 200: success_added = True
+
+                if success_added:
                     sub_domain = sub_settings.get("subDomain", "") or server_ip_or_domain
                     sub_port = sub_settings.get("subPort", "")
                     sub_path = sub_settings.get("subPath", "/sub/")
@@ -554,19 +563,92 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                     
                     sub_link = f"{proto}://{sub_domain}{port_str}{sub_path}{sub_id}"
 
-                    try: stream_settings = json.loads(target_inbound.get("streamSettings", "{}"))
-                    except: stream_settings = {}
-                        
-                    actual_config = build_vless_link(client_uuid, server_ip_or_domain, port, stream_settings, remark)
-                    return True, {"sub_link": sub_link, "actual_config": actual_config, "new_counter": current_counter}
+                    actual_configs = []
+                    if sub_base_url:
+                        if not sub_base_url.endswith('/'): sub_base_url += '/'
+                        final_sub_url = f"{sub_base_url}{sub_id}"
+                        for _ in range(4):
+                            try:
+                                r_sub = await session.get(final_sub_url, ssl=False)
+                                if r_sub.status == 200:
+                                    text = (await r_sub.text()).strip()
+                                    try:
+                                        pad = '=' * (-len(text) % 4)
+                                        decoded = base64.b64decode(text + pad).decode('utf-8')
+                                        lines = decoded.split('\n')
+                                    except: lines = text.split('\n')
+                                    for line in lines:
+                                        if "://" in line.strip(): actual_configs.append(f"`{line.strip()}`")
+                                    if actual_configs: break
+                            except: pass
+                            await asyncio.sleep(0.3)
+                    
+                    if not actual_configs:
+                        try: stream_settings = json.loads(target_inbound.get("streamSettings", "{}"))
+                        except: stream_settings = {}
+                        actual_config = build_vless_link(client_uuid, server_ip_or_domain, port, stream_settings, remark)
+                        actual_configs = [f"`{actual_config}`"]
+
+                    actual_config_str = "\n\n".join(actual_configs)
+
+                    return True, {"sub_link": sub_link, "actual_config": actual_config_str, "new_counter": current_counter}
                 else:
                     return False, "❌ خطا در ساخت کلاینت روی سرور"
         except Exception as e:
-            mode = "تونل Xray فعال" if proxy_url else "ارتباط مستقیم"
+            mode = "تونل اختصاصی فعال" if vpn_config else "ارتباط مستقیم"
             error_type = type(e).__name__
             return False, f"❌ خطا در اتصال ({mode}):\nنوع خطا: {error_type}\nدلیل: {str(e)}"
 
 main_keyboard = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🛒 سفارش جدید")], [KeyboardButton(text="📊 گزارش کارکرد"), KeyboardButton(text="🔄 راه‌اندازی مجدد")]], resize_keyboard=True)
+
+class SubState(StatesGroup):
+    panel_id = State()
+    link = State()
+
+@dp.message(Command("set_sub"))
+async def cmd_set_sub(message: types.Message):
+    chat_id = str(message.chat.id)
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+    if not user:
+        conn.close()
+        return
+    panels = conn.execute("SELECT * FROM panels").fetchall()
+    conn.close()
+    if not panels:
+        await message.answer("❌ هیچ سروری ثبت نشده است.")
+        return
+    builder = InlineKeyboardBuilder()
+    for p in panels:
+        builder.button(text=f"🌐 {p['name']}", callback_data=f"setsub_{p['id']}")
+    builder.adjust(1)
+    await message.answer("سرور مورد نظر را برای تنظیم لینک ساب انتخاب کنید:", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("setsub_"))
+async def process_setsub_panel(callback: types.CallbackQuery, state: FSMContext):
+    panel_id = callback.data.split("_")[1]
+    await state.update_data(panel_id=panel_id)
+    await state.set_state(SubState.link)
+    await callback.message.edit_text("🔗 **آدرس پایه سابسکریپشن این سرور را وارد کنید:**\n\nمثال: `https://domain:2096/sub/`\n\nبرای لغو کلمه `لغو` را بفرستید.", parse_mode="Markdown")
+
+@dp.message(SubState.link)
+async def process_setsub_link(message: types.Message, state: FSMContext):
+    txt = message.text.strip()
+    if txt == "لغو" or txt == "/start" or txt == "🔄 راه‌اندازی مجدد":
+        await state.clear()
+        await message.answer("❌ عملیات لغو شد.", reply_markup=main_keyboard)
+        return
+    if not txt.startswith("http"):
+        await message.answer("❌ آدرس نامعتبر است. حتماً باید با http یا https شروع شود.")
+        return
+    data = await state.get_data()
+    panel_id = data['panel_id']
+    conn = get_db()
+    conn.execute("UPDATE panels SET sub_url=? WHERE id=?", (txt, panel_id))
+    conn.commit()
+    conn.close()
+    await state.clear()
+    await message.answer("✅ **لینک ساب برای سرور مورد نظر ثبت شد!**\nاز این پس ربات خروجی ۱۰۰٪ دقیق را استخراج می‌کند.", parse_mode="Markdown", reply_markup=main_keyboard)
 
 @dp.message(CommandStart())
 @dp.message(F.text == "🔄 راه‌اندازی مجدد")
@@ -633,13 +715,9 @@ async def generate_configs(callback: types.CallbackQuery):
     if not panel:
         await callback.message.edit_text("❌ هیچ سروری در پنل مدیریت تعریف نشده است!")
         return conn.close()
-        
-    settings = conn.execute("SELECT vpn_config FROM settings LIMIT 1").fetchone()
-    vpn_config = settings['vpn_config'] if settings and settings['vpn_config'] else None
 
     await callback.message.edit_text(f"⏳ در حال تولید کانفیگ از سرور {panel['name']}...\nلطفاً صبور باشید (ممکن است تا ۴۰ ثانیه طول بکشد).")
     
-    # Counter logic updated: Now tracking via packages instead of stores
     current_counter = pkg['counter']
     
     for i in range(qty):
@@ -650,27 +728,26 @@ async def generate_configs(callback: types.CallbackQuery):
             url=panel['xui_url'], user=panel['xui_user'], pwd=panel['xui_pass'], 
             port=store['inbound_port'], prefix=prefix, suffix=suffix, 
             volume_gb=pkg['volume'], days=pkg['days'], start_counter=current_counter,
-            vpn_config=vpn_config
+            vpn_config=panel['vpn_config'], sub_base_url=panel['sub_url']
         )
         
         if success:
             smart_counter = result["new_counter"]
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("INSERT INTO configs_log (store_id, package_name, volume, created_at) VALUES (?, ?, ?, ?)", (store['id'], pkg['name'], pkg['volume'], now))
-            msg = f"✅ کانفیگ شما ساخته شد:\n\n`{result['actual_config']}`\n\n🔗 لینک سابسکریپشن:\n{result['sub_link']}\n\n🔢 کد اختصاصی: {smart_counter}"
-            await callback.message.answer(msg, parse_mode="Markdown")
+            msg = f"✅ کانفیگ شما ساخته شد:\n\n{result['actual_config']}\n\n🔗 لینک سابسکریپشن:\n{result['sub_link']}\n\n🔢 کد اختصاصی: {smart_counter}"
+            await callback.message.answer(msg)
             current_counter = smart_counter + 1
         else:
             await callback.message.answer(f"⚠️ {result}")
 
-    # Counter logic updated: Saving back to the specific package
     conn.execute("UPDATE packages SET counter=? WHERE id=?", (current_counter, pkg['id']))
     conn.commit()
     conn.close()
     await callback.message.delete()
 
 async def main():
-    print("🚀 ربات هوشمند مجهز به تونل مسیریاب VLESS و سیستم عیب‌یابی راه‌اندازی شد!")
+    print("🚀 ربات هوشمند مجهز به تونل مسیریاب پرقدرت (اختصاصی سرور) راه‌اندازی شد!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
@@ -681,7 +758,7 @@ sed -i "s/TARGET_TOKEN_PLACEHOLDER/$INPUT_BOT_TOKEN/g" /root/Proxy-Manager/bot.p
 
 
 # -----------------------------------
-# Create panel.html (With Package Counter Logic)
+# Create panel.html
 # -----------------------------------
 cat << 'EOF' > /root/Proxy-Manager/panel.html
 <!DOCTYPE html>
@@ -727,7 +804,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                     <span x-show="activeTab === 'packages'">پکیج‌های حجمی</span>
                     <span x-show="activeTab === 'reports'">گزارشات و مالی</span>
                     <span x-show="activeTab === 'users'">نمایندگان</span>
-                    <span x-show="activeTab === 'settings'">تنظیمات سیستم</span>
+                    <span x-show="activeTab === 'settings'">تنظیمات سرورها</span>
                 </h1>
                 <p class="text-[10px] text-pistachio-500 flex items-center gap-1 mt-1"><span class="w-1.5 h-1.5 rounded-full bg-pistachio-400 animate-pulse"></span> متصل</p>
             </div>
@@ -913,7 +990,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 </div>
             </div>
 
-            <!-- 6. تنظیمات (مولتی‌پنل، مسیریابی و بکاپ) -->
+            <!-- 6. تنظیمات (مولتی‌پنل و بکاپ) -->
             <div x-show="activeTab === 'settings'" class="space-y-6">
                 
                 <!-- بخش بکاپ و ریاستور -->
@@ -946,7 +1023,9 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                             <div><input x-model="newPanel.xui_user" type="text" placeholder="یوزرنیم X-UI" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
                             <div><input x-model="newPanel.xui_pass" type="password" placeholder="پسورد X-UI" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
                         </div>
-                        <div class="flex gap-2">
+                        <div><input x-model="newPanel.sub_url" type="text" placeholder="لینک پایه سابسکریپشن (اختیاری) - مثلا https://.../sub/" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none"></div>
+                        <div><textarea x-model="newPanel.vpn_config" rows="2" placeholder="کانفیگ تانل Xray (vless:// یا vmess://) - اختیاری" dir="ltr" class="w-full bg-dark-800 border border-dark-700 rounded-xl p-3 text-white outline-none resize-none"></textarea></div>
+                        <div class="flex gap-2 mt-2">
                             <button @click="savePanel()" class="flex-1 bg-pistachio-500 text-dark-900 font-bold py-3 rounded-xl glow-pistachio" x-text="editPanelId ? 'ذخیره تغییرات سرور' : 'ثبت سرور'"></button>
                             <button x-show="editPanelId" @click="cancelEditPanel()" class="w-1/3 bg-dark-700 text-gray-400 font-bold py-3 rounded-xl border border-dark-600">لغو</button>
                         </div>
@@ -956,7 +1035,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                     <div class="space-y-3">
                         <template x-for="p in panelsList" :key="p.id">
                             <div class="flex justify-between items-center bg-dark-900 p-3 rounded-xl border border-dark-600">
-                                <div><p class="text-sm font-bold text-white" x-text="p.name"></p><p class="text-[10px] text-gray-400 mt-1" dir="ltr" x-text="p.xui_url"></p></div>
+                                <div><p class="text-sm font-bold text-white flex items-center gap-2"><span x-text="p.name"></span> <i x-show="p.vpn_config" class="fa-solid fa-shield text-pistachio-500 text-xs" title="دارای تانل"></i></p><p class="text-[10px] text-gray-400 mt-1" dir="ltr" x-text="p.xui_url"></p></div>
                                 <div class="flex gap-2">
                                     <button @click="startEditPanel(p)" class="text-blue-400 p-2 bg-dark-800 rounded-lg"><i class="fa-solid fa-pen"></i></button>
                                     <button @click="deletePanel(p.id)" class="text-red-500 p-2 bg-dark-800 rounded-lg"><i class="fa-solid fa-trash"></i></button>
@@ -964,13 +1043,6 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                             </div>
                         </template>
                     </div>
-                </div>
-
-                <!-- بخش مسیریابی (کانفیگ ایران) -->
-                <div class="bg-dark-800 p-5 rounded-3xl border border-dark-700 shadow-lg">
-                    <h4 class="text-sm text-white font-bold border-b border-dark-600 pb-2 flex justify-between"><span>مسیریابی امن VPN</span><i class="fa-solid fa-route text-pistachio-500"></i></h4>
-                    <div class="mt-4"><label class="block text-xs text-gray-400 mb-2">کانفیگ اتصال (سرور ایران و ...)</label><textarea x-model="settingsData.vpn_config" rows="4" class="w-full bg-dark-900 text-pistachio-400 font-mono text-xs border border-dark-600 rounded-xl p-4 outline-none resize-none" dir="ltr" placeholder="vless://..."></textarea></div>
-                    <button @click="saveSettings()" class="w-full mt-4 bg-dark-700 border border-pistachio-500 text-pistachio-500 font-bold py-3.5 rounded-xl active:bg-pistachio-500 active:text-dark-900 transition-colors">ذخیره کانفیگ مسیریابی</button>
                 </div>
             </div>
         </main>
@@ -999,11 +1071,10 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 serverClock: '', clockInterval: null,
                 editStoreId: null, editPackageId: null, editPanelId: null,
 
-                newPanel: { name: '', xui_url: '', xui_user: '', xui_pass: '' },
+                newPanel: { name: '', xui_url: '', xui_user: '', xui_pass: '', vpn_config: '', sub_url: '' },
                 newStore: { name: '', panel_id: '', inbound_port: '', prefix: '' },
                 newPackage: { store_id: '', name: '', volume: '', days: '', suffix: '', counter: 1 },
                 newUser: { chat_id: '', owner_name: '', allowed_stores: [] },
-                settingsData: { vpn_config: '' },
                 
                 reportParams: { store_id: '', start_date: '', end_date: '' },
                 reportResults: null,
@@ -1015,19 +1086,13 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         if(this.loginUser === data.username && this.loginPass === data.password) { 
                             this.loggedIn = true; 
                             localStorage.setItem('panel_logged_in', 'true');
-                        } else { 
-                            alert('❌ نام کاربری یا رمز عبور اشتباه است!'); 
-                        }
-                    } catch(e) {
-                        alert('❌ خطا در برقراری ارتباط با سرور!');
-                    }
+                        } else { alert('❌ نام کاربری یا رمز عبور اشتباه است!'); }
+                    } catch(e) { alert('❌ خطا در برقراری ارتباط با سرور!'); }
                 },
 
                 initData() { 
-                    if(localStorage.getItem('panel_logged_in') === 'true') {
-                        this.loggedIn = true;
-                    }
-                    this.fetchStats(); this.fetchPanels(); this.fetchStores(); this.fetchPackages(); this.fetchUsers(); this.fetchSettings(); 
+                    if(localStorage.getItem('panel_logged_in') === 'true') { this.loggedIn = true; }
+                    this.fetchStats(); this.fetchPanels(); this.fetchStores(); this.fetchPackages(); this.fetchUsers();
                 },
                 
                 startClock(initialTime) {
@@ -1051,8 +1116,8 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                 },
 
                 async fetchPanels() { let res = await fetch('/api/panels'); this.panelsList = await res.json(); },
-                startEditPanel(p) { this.editPanelId = p.id; this.newPanel = { name: p.name, xui_url: p.xui_url, xui_user: p.xui_user, xui_pass: p.xui_pass }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
-                cancelEditPanel() { this.editPanelId = null; this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'' }; },
+                startEditPanel(p) { this.editPanelId = p.id; this.newPanel = { name: p.name, xui_url: p.xui_url, xui_user: p.xui_user, xui_pass: p.xui_pass, vpn_config: p.vpn_config || '', sub_url: p.sub_url || '' }; window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                cancelEditPanel() { this.editPanelId = null; this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'', vpn_config: '', sub_url: '' }; },
                 async savePanel() {
                     if(!this.newPanel.name || !this.newPanel.xui_url) return alert("نام و آدرس سرور الزامی است");
                     if(this.editPanelId) {
@@ -1060,7 +1125,7 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                         this.cancelEditPanel();
                     } else {
                         await fetch('/api/panels', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newPanel) });
-                        this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'' };
+                        this.newPanel = { name:'', xui_url:'', xui_user:'', xui_pass:'', vpn_config: '', sub_url: '' };
                     }
                     this.fetchPanels();
                 },
@@ -1090,7 +1155,6 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
 
                 async fetchPackages() { let res = await fetch('/api/packages'); this.packagesList = await res.json(); },
                 
-                /* Live Fetch Counter Logic moved to Packages */
                 async startEditPackage(pkg) {
                     try {
                         let res = await fetch('/api/packages');
@@ -1128,14 +1192,6 @@ cat << 'EOF' > /root/Proxy-Manager/panel.html
                     this.newUser = {chat_id:'', owner_name:'', allowed_stores:[]}; this.fetchUsers();
                 },
                 async deleteUser(id) { if(confirm("مطمئن هستید؟")) { await fetch('/api/users/' + id, { method: 'DELETE' }); this.fetchUsers(); } },
-
-                async fetchSettings() { 
-                    try { let res = await fetch('/api/settings'); if(res.ok) { let data = await res.json(); this.settingsData.vpn_config = data.vpn_config || ''; } } catch(e) {}
-                },
-                async saveSettings() {
-                    await fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.settingsData) });
-                    alert("✅ کانفیگ مسیریابی ذخیره شد");
-                },
 
                 async fetchReport() {
                     if(!this.reportParams.store_id || !this.reportParams.start_date || !this.reportParams.end_date) return alert("پر کردن تمامی فیلدها الزامی است.");
