@@ -531,7 +531,7 @@ async def create_xui_client(url, user, pwd, port, prefix, suffix, volume_gb, day
                 client_uuid = str(uuid.uuid4())
                 sub_id = str(uuid.uuid4())[:16]
                 total_bytes = int(volume_gb) * 1073741824 if volume_gb > 0 else 0
-                expiry_time = int(datetime.datetime.now().timestamp() * 1000) + (days * 86400 * 1000) if days > 0 else 0
+                expiry_time = -(days * 86400 * 1000) if days > 0 else 0
                 
                 new_client = {"id": client_uuid, "alterId": 0, "email": remark, "limitIp": 0, "totalGB": total_bytes, "expiryTime": expiry_time, "enable": True, "subId": sub_id}
                 
@@ -705,7 +705,8 @@ async def ask_quantity(callback: types.CallbackQuery):
     builder.button(text="۱ عدد", callback_data=f"qty_{pkg_id}_1")
     builder.button(text="۵ عدد", callback_data=f"qty_{pkg_id}_5")
     builder.button(text="۱۰ عدد", callback_data=f"qty_{pkg_id}_10")
-    builder.adjust(3)
+    builder.button(text="۵۰ عدد", callback_data=f"qty_{pkg_id}_50")
+    builder.adjust(2)
     await callback.message.edit_text("تعداد کانفیگ مورد نیاز را انتخاب کنید:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("qty_"))
